@@ -13,12 +13,35 @@ import pyttsx4
 from gtts import gTTS
 from io import BytesIO
 from simpleplayer import simpleplayer
-
 from vosk import Model, KaldiRecognizer
+
+import audioread
+import time
+from pydub import AudioSegment
+import time
+
+def get_audio_duration(file_path):
+    audio = AudioSegment.from_file(file_path)
+    duration_seconds = len(audio) / 1000  # Durée en secondes
+    minutes = int(duration_seconds // 60)
+    seconds = int(duration_seconds % 60)
+    return minutes, seconds
+
+def wait_for_audio(file_path):
+    minutes, seconds = get_audio_duration(file_path)
+    total_wait_time = minutes * 60 + seconds
+
+    print(f"Audio duration: {minutes} minutes {seconds} seconds.")
+    print("Waiting for the audio to finish...")
+    
+    time.sleep(total_wait_time)
+    print("Audio playback finished.")
+
 
 engine = pyttsx4.init()
 GOOGLE_API_KEY = "AIzaSyDY78QerX5e30_waM56LSVsVSMIKiOze9U"
 genai.configure(api_key=GOOGLE_API_KEY)
+
 
 googlemodel = genai.GenerativeModel('gemini-pro')
 preprompt = "Étant donné un texte provenant de l'utilisateur, vous allez interpréter son souhait. Votre tâche consiste a repondre au besoin de l'utilisateur et pour cela vous allez  écrire un json valide ayant une cle 'code' contenant le code Python qui utilise la bibliothèque PyAutoGUI pour exécuter la demande de l'utilisateur sur son ordinateur Windows dans le cas où sa demande implique un action sur l'ordinateur. si sa demande n'implique pas un action sur son ordinateur tu vas donner la reponse dans une cle 'response'. Si vous ne parvenez ou ne pouvez pas à répondre par un action sur l'ordinateur à la demande de l'utilisateur, vous devez renvoyer une clé 'error' contenant vos suggestions ou une reponse appropriée a sa demande. Dans le JSON final, la clé 'code' contiendra le code généré ecris sans utiliser de markdown sachant qu'on peut avoir une erreur. voici la demande de l'utilisateur : "
@@ -50,6 +73,7 @@ def callback(indata, frames, time, status):
     q.put(bytes(indata))
 
 def start_listening():
+    semaphore=0
     print('ok cool')
 
     parser = argparse.ArgumentParser(description=__doc__,
@@ -76,7 +100,7 @@ def start_listening():
             args.samplerate = int(device_info["default_samplerate"])
 
         if args.model is None:
-            model = Model(model_path=os.path.abspath("vosk-model-fr-0.22"))
+            model = Model(model_path=os.path.abspath("vosk-model-small-fr-pguyot-0.3rapide"))
         else:
             model = Model(lang=args.model)
 
@@ -90,47 +114,62 @@ def start_listening():
                                dtype="int16", channels=1, callback=callback):
             while True:
                 data = q.get()
-                if rec.AcceptWaveform(data):
-                    result = rec.Result()
-                    print(result)
-                    result = json.loads(result)
-                    # Process the recognized text here (e.g., print it, save it, etc.)
-                    # Replace this line with your desired code to handle the recognized text
-                    print(result['text'])
-                    if(len(result['text'])>0):
-                        response = googlemodel.generate_content(preprompt+result["text"])
-                        print(response.text[7:-3].strip())
-                        with open('data.json', 'w') as f:
-                            # contenu = f.read()
-                            f.write(response.text[7:-3].strip())
-                        
-                        
-                        with open("data.json", "r") as f:
-                            text = f.read()
-                            try:
-                                text = json.loads(text)
-                                if 'code' in text:
-                                    print(text["code"])
-                                    execute_code(text["code"])
-                                else:
-                                    if 'response' in text:
-                                        print(text["response"])
-                                        tts = gTTS(text['response'], lang='fr')
-                                        tts.save("mp3.mp3")
-                                        player = simpleplayer('mp3.mp3')
-                                        player.play()
+                if semaphore==0:
+                    if rec.AcceptWaveform(data):
+                        result = rec.Result()
+                        print(result)
+                        result = json.loads(result)
+                        # Process the recognized text here (e.g., print it, save it, etc.)
+                        # Replace this line with your desired code to handle the recognized text
+                        print(result['text'])
+                        if(len(result['text'])>0):
+                            response = googlemodel.generate_content(preprompt+result["text"])
+                            print(response.text[7:-3].strip())
+                            with open('data.json', 'w') as f:
+                                # contenu = f.read()
+                                f.write(response.text[7:-3].strip())
+                            
+                            
+                            with open("data.json", "r") as f:
+                                text = f.read()
+                                try:
+                                    text = json.loads(text)
+                                    if 'code' in text:
+                                        print(text["code"])
+                                        execute_code(text["code"])
                                     else:
-                                        print(text["error"])
-                                        
-                                        tts = gTTS(text['error'], lang='fr')
-                                        tts.save("mp3.mp3")
-                                        player = simpleplayer('mp3.mp3')
-                                        player.play()
-                            except:
-                                pass
-                        
-                else:
-                    pass
+                                        if 'response' in text:
+                                            print(text["response"])
+                                            semaphore = 1
+                                            tts = gTTS(text['response'], lang='fr')
+                                            tts.save("mp3.mp3")
+                                            player = simpleplayer('mp3.mp3')
+                                            player.play()
+                                            # player.AudioPlayer.wait()
+                                            print('lecture finit')
+                                            size = int((os.path.getsize("mp3.mp3"))/4096)+2
+                                            time.sleep(size)
+                                            # wait_for_audio("mp3.mp3")
+                                            semaphore = 0
+                                            
+                                        else:
+                                            print(text["error"])
+                                            semaphore = 1
+                                            tts = gTTS(text['error'], lang='fr')
+                                            tts.save("mp3.mp3")
+                                            player = simpleplayer('mp3.mp3')
+                                            player.play()
+                                            print('lecture finit')
+                                            # player.AudioPlayer.wait()
+                                            size = int((os.path.getsize("mp3.mp3"))/4096)+2
+                                            time.sleep(size)
+                                            semaphore = 0
+                                            
+                                except:
+                                    pass
+                            
+                    else:
+                        pass
 
                 if dump_fn is not None:
                     dump_fn.write(data)
